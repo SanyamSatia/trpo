@@ -7,7 +7,7 @@ import time
 import os
 import logging
 import gym
-from gym import envs, scoreboard
+from gym import envs, scoreboard, wrappers
 from gym.spaces import Discrete, Box
 import prettytensor as pt
 from space_conversion import SpaceConversionEnv
@@ -24,6 +24,7 @@ parser.add_argument("--n_iter", type=int, default=30)
 parser.add_argument("--gamma", type=float, default=.99)
 parser.add_argument("--max_kl", type=float, default=.001)
 parser.add_argument("--cg_damping", type=float, default=1e-3)
+parser.add_argument("-upload", action='store_true')
 
 args =  parser.parse_args()
 
@@ -51,8 +52,8 @@ class ContinTRPOAgent(object):
             dtype, shape=[
                 None, env.observation_space.shape[0]])
         act_dim = np.prod(env.action_space.shape)
-        self.action = action = tf.placeholder(tf.float32, shape=[None, act_dim])  
-        self.advant = advant = tf.placeholder(dtype, shape=[None])  
+        self.action = action = tf.placeholder(tf.float32, shape=[None, act_dim])
+        self.advant = advant = tf.placeholder(dtype, shape=[None])
         self.oldaction_dist_mu = oldaction_dist_mu = tf.placeholder(dtype, shape=[None, act_dim])
         self.oldaction_dist_logstd = oldaction_dist_logstd = tf.placeholder(dtype, shape=[None, act_dim])
 
@@ -60,9 +61,9 @@ class ContinTRPOAgent(object):
         action_dist_mu = (pt.wrap(self.obs).
                          fully_connected(64, activation_fn=tf.nn.relu).
                          fully_connected(64, activation_fn=tf.nn.relu).
-                         fully_connected(act_dim)) # output means and logstd's.  Good! 
+                         fully_connected(act_dim)) # output means and logstd's.  Good!
         action_dist_logstd_param = tf.Variable((.01*np.random.randn(1, act_dim)).astype(np.float32))
-        action_dist_logstd = tf.tile(action_dist_logstd_param, tf.pack((tf.shape(action_dist_mu)[0], 1)))
+        action_dist_logstd = tf.tile(action_dist_logstd_param, tf.stack((tf.shape(action_dist_mu)[0], 1)))
 
         eps = 1e-8
         self.action_dist_mu = action_dist_mu
@@ -77,8 +78,8 @@ class ContinTRPOAgent(object):
         Nf = tf.cast(N, dtype)
         surr = -tf.reduce_mean(ratio_n * advant)  # Surrogate loss
         var_list = tf.trainable_variables()
-        
-        # Introduced the change into here: 
+
+        # Introduced the change into here:
         kl = gauss_KL(oldaction_dist_mu, oldaction_dist_logstd,
                       action_dist_mu, action_dist_logstd) / Nf
         ent = gauss_ent(action_dist_mu, action_dist_logstd) / Nf
@@ -102,20 +103,20 @@ class ContinTRPOAgent(object):
         self.fvp = flatgrad(gvp, var_list)
         self.gf = GetFlat(self.session, var_list)
         self.sff = SetFromFlat(self.session, var_list)
-        self.session.run(tf.initialize_variables(var_list))
+        self.session.run(tf.variables_initializer(var_list))
         self.vf = LinearVF()
 
     def act(self, obs, *args):
         obs = np.expand_dims(obs, 0)
         action_dist_mu, action_dist_logstd  = \
             self.session.run([self.action_dist_mu, self.action_dist_logstd], {self.obs: obs})
-        
+
         act = action_dist_mu + np.exp(action_dist_logstd)*np.random.randn(*action_dist_logstd.shape)
 
         return act.ravel(), \
             dict2(action_dist_mu = action_dist_mu,
                   action_dist_logstd = action_dist_logstd)
-    
+
 
 
     def learn(self, render_freq=50):
@@ -172,7 +173,7 @@ class ContinTRPOAgent(object):
             shs = (.5 * stepdir.dot(fisher_vector_product(stepdir)) )
             assert shs > 0
 
-            lm = np.sqrt(shs / config.max_kl) 
+            lm = np.sqrt(shs / config.max_kl)
 
 
             fullstep = stepdir / lm
@@ -209,7 +210,7 @@ class ContinTRPOAgent(object):
         env = self.env
         ret = []
         for o, r, d in zip(observation_n, reward_n, done_n):
-            o = env.observation_convert(o, env._env.observation_space, env.observation_space)  
+            o = env.observation_convert(o, env._env.observation_space, env.observation_space)
             obs = np.expand_dims(o, 0)
             action_dist_n = self.session.run(self.action_dist_n, {self.obs: obs})
             action = int(np.argmax(action_dist_n, 1)[0])
@@ -224,12 +225,14 @@ print ("taks = {}".format(args.task))
 env = envs.make(args.task)
 
 
-env.monitor.start(experiment_dir)
+env = wrappers.Monitor(env, experiment_dir)
 
 agent = ContinTRPOAgent(env)
 agent.learn()
-env.monitor.close()
-gym.upload(experiment_dir, algorithm_id=algo)
+env.close()
+
+if args.upload == True:
+    gym.upload(experiment_dir, algorithm_id=algo)
 
 
 print (experiment_dir)

@@ -1,4 +1,4 @@
-from __future__ import division 
+from __future__ import division
 import numpy as np
 import tensorflow as tf
 import random
@@ -43,7 +43,7 @@ def gauss_KL(mu1, logstd1, mu2, logstd2):
     var1 = tf.exp(2*logstd1)
     var2 = tf.exp(2*logstd2)
 
-    kl = tf.reduce_sum(logstd2 - logstd1 + (var1 + tf.square(mu1 - mu2))/(2*var2) - 0.5) 
+    kl = tf.reduce_sum(logstd2 - logstd1 + (var1 + tf.square(mu1 - mu2))/(2*var2) - 0.5)
     return kl
 
 
@@ -58,7 +58,8 @@ def gauss_sample(mu, logstd):
 def rollout(env, agent, max_pathlength, n_timesteps):
     paths = []
     timesteps_sofar = 0
-    while timesteps_sofar < n_timesteps:
+    done = False
+    while timesteps_sofar < n_timesteps and not done:
         obs, actions, rewards, action_dists = [], [], [], []
         if np.random.randint(0, 100) == 0:
             env.monitor.configure(video=True)
@@ -74,6 +75,7 @@ def rollout(env, agent, max_pathlength, n_timesteps):
             res = env.step(action)
             ob = res[0]
             rewards.append(res[1])
+            done = res[2]
             if res[2] or timesteps_sofar == n_timesteps: #i.e., if done
                 path = {"obs": np.concatenate(np.expand_dims(obs, 0)),
                         "action_dists": np.concatenate(action_dists),
@@ -97,11 +99,11 @@ class Filter:
         self.v = self.v * (self.n / (self.n + 1)) + (o - self.m1)**2 * 1/(1 + self.n)
         self.std = (self.v + 1e-6)**.5 # std
         self.n += 1
-        if self.filter_mean: 
+        if self.filter_mean:
             o1 =  (o - self.m1)/self.std
         else:
             o1 =  o/self.std
-        o1 = (o1 > 10) * 10 + (o1 < -10)* (-10) + (o1 < 10) * (o1 > -10) * o1 
+        o1 = (o1 > 10) * 10 + (o1 < -10)* (-10) + (o1 < 10) * (o1 > -10) * o1
         return o1
 filter = Filter()
 filter_std = Filter()
@@ -110,7 +112,8 @@ def rollout_contin(env, agent, max_pathlength, n_timesteps, render=False):
     paths = []
     timesteps_sofar = 0
     first = True
-    while timesteps_sofar < n_timesteps:
+    done = False
+    while timesteps_sofar < n_timesteps and not done:
         obs, actions, rewards, action_dists_mu, action_dists_logstd = [], [], [], [], []
         ob = filter(env.reset())
         for _ in xrange(max_pathlength):
@@ -123,10 +126,11 @@ def rollout_contin(env, agent, max_pathlength, n_timesteps, render=False):
             res = env.step(action)
             ob = filter(res[0])
             rewards.append((res[1]))
+            done = res[2]
             if render and first: env.render()
             if res[2] or timesteps_sofar == n_timesteps:
                 # forceful termination if timesteps_sofar == n_timesteps
-                # otherwise paths is empty, which also is bad. 
+                # otherwise paths is empty, which also is bad.
                 path = dict2(obs = np.concatenate(np.expand_dims(obs, 0)),
                              action_dists_mu = np.concatenate(action_dists_mu),
                              action_dists_logstd = np.concatenate(action_dists_logstd),
@@ -188,8 +192,7 @@ def numel(x):
 
 def flatgrad(loss, var_list):
     grads = tf.gradients(loss, var_list)
-    return tf.concat(0, [tf.reshape(grad, [numel(v)])
-                         for (v, grad) in zip(var_list, grads)])
+    return tf.concat([tf.reshape(grad, [numel(v)]) for (v, grad) in zip(var_list, grads)], 0)
 
 
 class SetFromFlat(object):
@@ -223,7 +226,7 @@ class GetFlat(object):
 
     def __init__(self, session, var_list):
         self.session = session
-        self.op = tf.concat(0, [tf.reshape(v, [numel(v)]) for v in var_list])
+        self.op = tf.concat([tf.reshape(v, [numel(v)]) for v in var_list], 0)
 
     def __call__(self):
         return self.op.eval(session=self.session)
@@ -278,5 +281,3 @@ class dict2(dict):
     def __init__(self, **kwargs):
         dict.__init__(self, kwargs)
         self.__dict__ = self
-
-
