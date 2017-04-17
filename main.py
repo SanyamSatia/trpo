@@ -40,6 +40,8 @@ class ContinTRPOAgent(object):
                    max_kl = args.max_kl,
                    cg_damping = args.cg_damping)
 
+    global checkpoint_dir, checkpoint_frequency
+
     def __init__(self, env):
         self.env = env
         if not isinstance(env.observation_space, Box) or \
@@ -105,6 +107,13 @@ class ContinTRPOAgent(object):
         self.sff = SetFromFlat(self.session, var_list)
         self.session.run(tf.variables_initializer(var_list))
         self.vf = LinearVF()
+
+        self.saver = tf.train.Saver()
+
+        latest_ckpt = tf.train.latest_checkpoint(checkpoint_dir)
+        if latest_ckpt != None:
+            self.saver.restore(self.session, latest_ckpt)
+            print("Restoring last checkpoint.")
 
     def act(self, obs, *args):
         obs = np.expand_dims(obs, 0)
@@ -189,6 +198,9 @@ class ContinTRPOAgent(object):
             surrafter, kloldnew, entropy = self.session.run(
                 self.losses, feed_dict=feed)
 
+            if i % checkpoint_frequency == 0 and i != 0:
+                self.saver.save(self.session, checkpoint_dir + str(i) + '.ckpt')
+
             episoderewards = np.array(
                 [path["rewards"].sum() for path in paths])
             stats = {}
@@ -218,6 +230,12 @@ class ContinTRPOAgent(object):
             ret.append(action)
         return ret
 
+
+checkpoint_frequency = 1000
+checkpoint_dir = os.path.join(os.getcwd(), 'checkpoints/')
+
+if not os.path.exists(checkpoint_dir):
+    os.makedirs(checkpoint_dir)
 
 experiment_dir = tempfile.mkdtemp()
 logging.getLogger().setLevel(logging.DEBUG)
